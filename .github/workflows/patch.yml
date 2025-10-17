@@ -33,15 +33,15 @@ jobs:
         run: |
           set -e
           if git ls-remote "${{ github.event.inputs.KERNEL_GIT }}" | grep -w "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" > /dev/null; then
-              echo "Kernel repository validated"
+              echo "✓ Kernel repository validated"
           else
-              echo "Invalid kernel repository or branch"
+              echo "✗ Invalid kernel repository or branch"
               exit 1
           fi
           if git ls-remote "${{ github.event.inputs.KSU_GIT }}" | grep -w "${{ github.event.inputs.KSU_GIT_BRANCH }}" > /dev/null; then
-              echo "KernelSU repository validated"
+              echo "✓ KernelSU repository validated"
           else
-              echo "Invalid KernelSU repository or branch"
+              echo "✗ Invalid KernelSU repository or branch"
               exit 1
           fi
 
@@ -51,6 +51,17 @@ jobs:
           sudo sed -Ei 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -y
           sudo apt-get build-dep -y coccinelle
+
+      - name: Build and install Coccinelle
+        run: |
+          git clone --depth=1 https://github.com/coccinelle/coccinelle.git
+          cd coccinelle
+          ./autogen
+          ./configure
+          make -j$(nproc --all)
+          sudo make -j$(nproc --all) install
+          cd ..
+          rm -rf coccinelle
 
       - name: Clone kernel source
         run: |
