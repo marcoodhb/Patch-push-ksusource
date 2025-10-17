@@ -1,0 +1,118 @@
+name: Patch Kernel with KernelSU
+
+on:
+  workflow_dispatch:
+    inputs:
+      KERNEL_GIT:
+        description: 'Link al repositorio del kernel original:'
+        required: true
+      KERNEL_GIT_BRANCH:
+        description: 'Rama del kernel original:'
+        required: true
+      KSU_GIT:
+        description: 'Link al repositorio de KernelSU:'
+        required: false
+        default: 'https://github.com/KernelSU-Next/KernelSU-Next.git'
+      KSU_GIT_BRANCH:
+        description: 'Rama de KernelSU:'
+        required: false
+        default: 'next'
+      TARGET_REPO_URL:
+        description: 'URL del repositorio destino (sin https://, ej: github.com/usuario/repo.git):'
+        required: true
+      TARGET_BRANCH:
+        description: 'Rama destino donde pushear:'
+        required: true
+
+jobs:
+  patch_kernel:
+    name: Patch and Push Kernel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          set -e
+          if git ls-remote "${{ github.event.inputs.KERNEL_GIT }}" | grep -w "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" > /dev/null; then
+              echo "Kernel repository validated"
+          else
+              echo "Invalid kernel repository or branch"
+              exit 1
+          fi
+          if git ls-remote "${{ github.event.inputs.KSU_GIT }}" | grep -w "${{ github.event.inputs.KSU_GIT_BRANCH }}" > /dev/null; then
+              echo "KernelSU repository validated"
+          else
+              echo "Invalid KernelSU repository or branch"
+              exit 1
+          fi
+
+      - name: Setup build environment
+        run: |
+          sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources~
+          sudo sed -Ei 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -y
+          sudo apt build-dep -y linux
+          sudo apt-get build-dep -y coccinelle
+
+      - name: Build and install Coccinelle
+        run: |
+          git clone --depth=1 https://github.com/coccinelle/coccinelle.git
+          cd coccinelle
+          ./autogen
+          ./configure
+          make -j$(nproc --all)
+          sudo make -j$(nproc --all) install
+          cd ..
+
+      - name: Clone kernel source
+        run: |
+          mkdir kernel-src-clone
+          cd kernel-src-clone
+          if repo init --no-repo-verify --git-lfs --depth=1 -u "${{ github.event.inputs.KERNEL_GIT }}" -b "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" 2>/dev/null; then
+              repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune --force-sync -j$(nproc --all)
+              cd ..
+              KERNEL_PATH=$(find kernel-src-clone -maxdepth 2 -type d -name "common" | head -n 1)
+              if [ -n "$KERNEL_PATH" ]; then
+                  ln -sf "$KERNEL_PATH" kernel-src
+              else
+                  ln -sf kernel-src-clone kernel-src
+              fi
+          else
+              cd ..
+              git clone --depth=1 "${{ github.event.inputs.KERNEL_GIT }}" -b "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" kernel-src-clone
+              ln -sf kernel-src-clone kernel-src
+          fi
+
+      - name: Update submodules
+        working-directory: kernel-src
+        run: |
+          git submodule update --init --recursive || true
+
+      - name: Patch KernelSU into kernel
+        working-directory: kernel-src
+        run: |
+          [ -L "drivers/kernelsu" ] && rm "drivers/kernelsu"
+          grep -q "kernelsu" "./drivers/Makefile" && sed -i '/kernelsu/d' "./drivers/Makefile"
+          grep -q "drivers/kernelsu/Kconfig" "./drivers/Kconfig" && sed -i '/drivers\/kernelsu\/Kconfig/d' "./drivers/Kconfig"
+          [ -d "KernelSU" ] && rm -rf "KernelSU"
+          
+          git clone "${{ github.event.inputs.KSU_GIT }}" -b "${{ github.event.inputs.KSU_GIT_BRANCH }}" KernelSU
+          ln -sf ../KernelSU/kernel drivers/kernelsu
+          grep -q "kernelsu" "./drivers/Makefile" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "./drivers/Makefile"
+          grep -q "source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig"
+
+      - name: Apply scope-minimized hooks
+        working-directory: kernel-src
+        run: |
+          git clone --depth=1 https://github.com/devnoname120/kernelsu-coccinelle.git
+          ./kernelsu-coccinelle/scope-minimized-hooks/apply.sh .
+          rm -rf kernelsu-coccinelle
+          rm -rf android/abi_gki_protected_exports* || true
+
+      - name: Push patched kernel
+        working-directory: kernel-src
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git add .
+          git commit -m "patch KSU scope minimized hooks [skip ci]"
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@${{ github.event.inputs.TARGET_REPO_URL }} HEAD:refs/heads/${{ github.event.inputs.TARGET_BRANCH }} --force
