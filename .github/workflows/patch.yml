@@ -103,8 +103,9 @@ jobs:
       - name: Apply scope-minimized hooks
         working-directory: kernel-src
         run: |
+          set -x
           git clone --depth=1 https://github.com/devnoname120/kernelsu-coccinelle.git
-          ./kernelsu-coccinelle/scope-minimized-hooks/apply.sh .
+          bash -x ./kernelsu-coccinelle/scope-minimized-hooks/apply.sh .
           rm -rf kernelsu-coccinelle
           rm -rf android/abi_gki_protected_exports* || true
 
