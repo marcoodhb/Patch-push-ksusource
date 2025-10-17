@@ -47,6 +47,8 @@ jobs:
 
       - name: Setup build environment
         run: |
+          sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources~
+          sudo sed -Ei 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -y
           sudo apt-get build-dep -y coccinelle
 
