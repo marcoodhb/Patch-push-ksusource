@@ -90,15 +90,24 @@ jobs:
       - name: Patch KernelSU into kernel
         working-directory: kernel-src
         run: |
+          set -e
+          echo "Cleaning up any old KernelSU configurations..."
+          git submodule deinit -f KernelSU || true
+          git rm -f KernelSU || true
+          rm -rf .git/modules/KernelSU || true
+          
           [ -L "drivers/kernelsu" ] && rm "drivers/kernelsu"
           grep -q "kernelsu" "./drivers/Makefile" && sed -i '/kernelsu/d' "./drivers/Makefile"
           grep -q "drivers/kernelsu/Kconfig" "./drivers/Kconfig" && sed -i '/drivers\/kernelsu\/Kconfig/d' "./drivers/Kconfig"
-          [ -d "KernelSU" ] && rm -rf "KernelSU"
           
-          git clone "${{ github.event.inputs.KSU_GIT }}" -b "${{ github.event.inputs.KSU_GIT_BRANCH }}" KernelSU
+          echo "Adding KernelSU as a proper submodule..."
+          git submodule add -b ${{ github.event.inputs.KSU_GIT_BRANCH }} --name KernelSU --force "${{ github.event.inputs.KSU_GIT }}" KernelSU
+          
+          echo "Linking KernelSU and patching build system..."
           ln -sf ../KernelSU/kernel drivers/kernelsu
           grep -q "kernelsu" "./drivers/Makefile" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "./drivers/Makefile"
           grep -q "source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig"
+          echo "✓ KernelSU patched successfully as a submodule"
 
       - name: Apply scope-minimized hooks
         working-directory: kernel-src
