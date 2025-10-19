@@ -124,5 +124,5 @@ jobs:
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add .
-          git commit -m "patch KSU scope minimized hooks [skip ci]"
+          git commit -m "Patch KSU scope minimized hooks"
           git push https://${{ github.actor }}:${{ secrets.PAT_TOKEN }}@${{ github.event.inputs.TARGET_REPO_URL }} HEAD:refs/heads/${{ github.event.inputs.TARGET_BRANCH }} --force
