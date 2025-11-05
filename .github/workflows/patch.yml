@@ -99,6 +99,6 @@ jobs:
           if git diff-index --quiet HEAD; then
             echo "No changes to commit. Nothing to push."
           else
-            git commit -m "Automated Patch: KernelSU & Hooks"
+            git commit -m "Patch KernelSU & minimized hooks"
             git push https://x-access-token:${{ secrets.CLONE_TOKEN }}@${{ github.event.inputs.TARGET_REPO_URL }} HEAD:refs/heads/${{ github.event.inputs.TARGET_BRANCH }} --force
           fi
