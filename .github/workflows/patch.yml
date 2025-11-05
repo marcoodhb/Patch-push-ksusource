@@ -4,24 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       KERNEL_GIT:
-        description: 'Link al repositorio del kernel original:'
+        description: 'Link to the private kernel repository:'
         required: true
       KERNEL_GIT_BRANCH:
-        description: 'Rama del kernel original:'
+        description: 'Branch of the original kernel:'
         required: true
       KSU_GIT:
-        description: 'Link al repositorio de KernelSU:'
+        description: 'Link to KernelSU repository:'
         required: false
         default: 'https://github.com/KernelSU-Next/KernelSU-Next.git'
       KSU_GIT_BRANCH:
-        description: 'Rama de KernelSU:'
+        description: 'Branch of KernelSU:'
         required: false
         default: 'next'
       TARGET_REPO_URL:
-        description: 'URL del repositorio destino (sin https://, ej: github.com/usuario/repo.git):'
+        description: 'URL of the target repository (e.g., github.com/user/repo.git):'
         required: true
       TARGET_BRANCH:
-        description: 'Rama destino donde pushear:'
+        description: 'Target branch to push to:'
         required: true
 
 jobs:
@@ -29,100 +29,70 @@ jobs:
     name: Patch and Push Kernel
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs
+      - name: Prepare Repository String
+        id: repo_prep
         run: |
-          set -e
-          if git ls-remote "${{ github.event.inputs.KERNEL_GIT }}" | grep -w "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" > /dev/null; then
-              echo "✓ Kernel repository validated"
-          else
-              echo "✗ Invalid kernel repository or branch"
-              exit 1
-          fi
-          if git ls-remote "${{ github.event.inputs.KSU_GIT }}" | grep -w "${{ github.event.inputs.KSU_GIT_BRANCH }}" > /dev/null; then
-              echo "✓ KernelSU repository validated"
-          else
-              echo "✗ Invalid KernelSU repository or branch"
-              exit 1
-          fi
+          REPO_URL="${{ github.event.inputs.KERNEL_GIT }}"
+          REPO_PATH=${REPO_URL#https://github.com/}
+          REPO_PATH=${REPO_PATH%.git}
+          echo "repo_path=${REPO_PATH}" >> $GITHUB_OUTPUT
 
-      - name: Setup build environment
-        run: |
-          sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources~
-          sudo sed -Ei 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
-          sudo apt-get update -y
-          sudo apt-get build-dep -y coccinelle
+      - name: Clone Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.repo_prep.outputs.repo_path }}
+          token: ${{ secrets.CLONE_TOKEN }}
+          ref: ${{ github.event.inputs.KERNEL_GIT_BRANCH }}
+          path: 'kernel-src'
+          fetch-depth: 0
 
-      - name: Build and install Coccinelle
+      - name: Setup Coccinelle
         run: |
+          sudo apt-get update -y && sudo apt-get build-dep -y coccinelle
           git clone --depth=1 https://github.com/coccinelle/coccinelle.git
           cd coccinelle
-          ./autogen
-          ./configure
-          make -j$(nproc --all)
-          sudo make -j$(nproc --all) install
-          cd ..
-          rm -rf coccinelle
+          ./autogen && ./configure && make -j$(nproc --all) && sudo make install
+          cd .. && rm -rf coccinelle
 
-      - name: Clone kernel source
-        run: |
-          mkdir kernel-src-clone
-          cd kernel-src-clone
-          if repo init --no-repo-verify --git-lfs --depth=1 -u "${{ github.event.inputs.KERNEL_GIT }}" -b "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" 2>/dev/null; then
-              repo sync -c --no-clone-bundle --no-tags --optimized-fetch --prune --force-sync -j$(nproc --all)
-              cd ..
-              KERNEL_PATH=$(find kernel-src-clone -maxdepth 2 -type d -name "common" | head -n 1)
-              if [ -n "$KERNEL_PATH" ]; then
-                  ln -sf "$KERNEL_PATH" kernel-src
-              else
-                  ln -sf kernel-src-clone kernel-src
-              fi
-          else
-              cd ..
-              git clone --depth=1 "${{ github.event.inputs.KERNEL_GIT }}" -b "${{ github.event.inputs.KERNEL_GIT_BRANCH }}" kernel-src-clone
-              ln -sf kernel-src-clone kernel-src
-          fi
-
-      - name: Update submodules
+      - name: Update Submodules
         working-directory: kernel-src
-        run: |
-          git submodule update --init --recursive || true
+        run: git submodule update --init --recursive || true
 
-      - name: Patch KernelSU into kernel
+      - name: Patch KernelSU
         working-directory: kernel-src
         run: |
           set -e
-          echo "Cleaning up any old KernelSU configurations..."
           rm -rf KernelSU .git/modules/KernelSU
           git config -f .gitmodules --remove-section submodule.KernelSU 2>/dev/null || true
-    
           [ -L "drivers/kernelsu" ] && rm "drivers/kernelsu"
           grep -q "kernelsu" "./drivers/Makefile" && sed -i '/kernelsu/d' "./drivers/Makefile"
           grep -q "drivers/kernelsu/Kconfig" "./drivers/Kconfig" && sed -i '/drivers\/kernelsu\/Kconfig/d' "./drivers/Kconfig"
-    
-          echo "Cloning KernelSU directly (no submodule)..."
+          
           git clone --depth=1 -b ${{ github.event.inputs.KSU_GIT_BRANCH }} "${{ github.event.inputs.KSU_GIT }}" KernelSU
-          rm -rf KernelSU/.git  # Remove .git to integrate as regular code
-    
-          echo "Linking KernelSU and patching build system..."
+          rm -rf KernelSU/.git
+
           ln -sf ../KernelSU/kernel drivers/kernelsu
           grep -q "kernelsu" "./drivers/Makefile" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "./drivers/Makefile"
           grep -q "source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "./drivers/Kconfig"
-          echo "✓ KernelSU integrated successfully"
 
-      - name: Apply scope-minimized hooks
+      - name: Apply Scope-Minimized Hooks
         working-directory: kernel-src
         run: |
-          set -x
           git clone --depth=1 https://github.com/marcoodhb/kernelsu-coccinelle.git
           bash -x ./kernelsu-coccinelle/scope-minimized-hooks/apply.sh .
           rm -rf kernelsu-coccinelle
           rm -rf android/abi_gki_protected_exports* || true
 
-      - name: Push patched kernel
+      - name: Commit and Push Changes
         working-directory: kernel-src
         run: |
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git add .
-          git commit -m "Patch KSU scope minimized hooks"
-          git push https://${{ github.actor }}:${{ secrets.PAT_TOKEN }}@${{ github.event.inputs.TARGET_REPO_URL }} HEAD:refs/heads/${{ github.event.inputs.TARGET_BRANCH }} --force
+          
+          if git diff-index --quiet HEAD; then
+            echo "No changes to commit. Nothing to push."
+          else
+            git commit -m "Automated Patch: KernelSU & Hooks"
+            git push https://x-access-token:${{ secrets.CLONE_TOKEN }}@${{ github.event.inputs.TARGET_REPO_URL }} HEAD:refs/heads/${{ github.event.inputs.TARGET_BRANCH }} --force
+          fi
