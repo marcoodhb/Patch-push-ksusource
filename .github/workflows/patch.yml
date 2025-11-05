@@ -46,9 +46,15 @@ jobs:
           path: 'kernel-src'
           fetch-depth: 0
 
-      - name: Setup Coccinelle
+      - name: Setup Build Environment
         run: |
-          sudo apt-get update -y && sudo apt-get build-dep -y coccinelle
+          # Enable source repositories ('deb-src'), which are required for 'apt build-dep'
+          sudo sed -Ei 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -y
+
+      - name: Build and Install Coccinelle
+        run: |
+          sudo apt-get build-dep -y coccinelle
           git clone --depth=1 https://github.com/coccinelle/coccinelle.git
           cd coccinelle
           ./autogen && ./configure && make -j$(nproc --all) && sudo make install
